@@ -4,7 +4,7 @@ on:
   schedule:
     # 每天北京时间 00:00 运行（UTC 时间 16:00）
     # 使用 cron 语法: 分钟 小时 日 月 星期
-    - cron: '0 12 * * *'
+    - cron: '0 14 * * *'
   
   # 允许手动触发
   workflow_dispatch:
