@@ -1,28 +1,31 @@
 name: Daily Sign In
 
+permissions:
+  contents: write
+
 on:
   schedule:
-    # 每天北京时间 00:00 运行（UTC 时间 16:00）
-    # 使用 cron 语法: 分钟 小时 日 月 星期
+    # 当前 UTC 14:00（可自行调整初始时间）
     - cron: '0 14 * * *'
-  
-  # 允许手动触发
+
   workflow_dispatch:
 
 jobs:
   sign-in:
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
-      
+        with:
+          fetch-depth: 0
+
       - name: 设置 Python 环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.13'
           cache: 'pip'
-        
+
       - name: 安装系统依赖
         run: |
           sudo apt-get update
@@ -45,17 +48,17 @@ jobs:
             libcairo2 \
             libatk1.0-0 \
             libgtk-3-0
-      
+
       - name: 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-      
+
       - name: 安装 Playwright 浏览器
         run: |
           python -m playwright install chromium
           python -m playwright install-deps chromium
-      
+
       - name: 运行签到脚本
         env:
           SIGN_IN_USERNAME: ${{ secrets.SIGN_IN_USERNAME }}
@@ -66,7 +69,9 @@ jobs:
           Xvfb :99 -screen 0 1280x720x24 > xvfb.log 2>&1 &
           XVFB_PID=$!
           sleep 2
-          ffmpeg -y -video_size 1280x720 -framerate 15 -f x11grab -i :99.0 -pix_fmt yuv420p sign-in-recording.mp4 > ffmpeg.log 2>&1 &
+
+          ffmpeg -y -video_size 1280x720 -framerate 15 -f x11grab -i :99.0 \
+            -pix_fmt yuv420p sign-in-recording.mp4 > ffmpeg.log 2>&1 &
           FFMPEG_PID=$!
 
           set +e
@@ -76,11 +81,13 @@ jobs:
 
           kill -INT $FFMPEG_PID || true
           wait $FFMPEG_PID || true
+
           kill $XVFB_PID || true
           wait $XVFB_PID || true
 
-          exit $EXIT_CODE
-      
+          echo "SIGN_EXIT_CODE=$EXIT_CODE" >> "$GITHUB_ENV"
+          echo "Sign exit code: $EXIT_CODE"
+
       - name: 上传签到截图
         if: always()
         uses: actions/upload-artifact@v4
@@ -94,3 +101,59 @@ jobs:
             xvfb.log
             ffmpeg.log
           retention-days: 30
+
+      - name: 修改下一次 cron 时间
+        if: always()
+        run: |
+          python << 'EOF'
+          import re
+          from pathlib import Path
+
+          workflow = Path(".github/workflows/time.yaml")
+          text = workflow.read_text(encoding="utf-8")
+
+          m = re.search(r"cron:\s*'0\s+(\d+)\s+\*\s+\*\s+\*'", text)
+          if not m:
+              raise SystemExit("没有找到 cron")
+
+          current = int(m.group(1))
+          next_hour = (current + 2) % 24
+
+          text = re.sub(
+              r"cron:\s*'0\s+\d+\s+\*\s+\*\s+\*'",
+              f"cron: '0 {next_hour} * * *'",
+              text,
+              count=1
+          )
+
+          workflow.write_text(text, encoding="utf-8")
+          print(f"Cron updated: {current} -> {next_hour}")
+          EOF
+
+      - name: 提交新的 cron
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add .github/workflows/time.yaml
+
+          if git diff --cached --quiet; then
+            echo "No changes"
+            exit 0
+          fi
+
+          git commit -m "Auto update cron schedule"
+
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "${GITHUB_REF_NAME}"
+
+      - name: 恢复签到结果
+        if: always()
+        run: |
+          if [ "$SIGN_EXIT_CODE" != "0" ]; then
+            echo "签到失败"
+            exit "$SIGN_EXIT_CODE"
+          fi
+
+          echo "签到成功"
