@@ -5,7 +5,7 @@ permissions:
 
 on:
   schedule:
-    # 当前 UTC 14:00（可自行调整初始时间）
+    # 当前 UTC 14:00（可循环 +2 小时）
     - cron: '0 14 * * *'
 
   workflow_dispatch:
@@ -58,6 +58,13 @@ jobs:
         run: |
           python -m playwright install chromium
           python -m playwright install-deps chromium
+
+      # ✅ 新增：0～15 分钟随机等待
+      - name: 随机等待
+        run: |
+          DELAY=$((RANDOM % 16))
+          echo "Random delay: ${DELAY} minutes"
+          sleep $((DELAY * 60))
 
       - name: 运行签到脚本
         env:
