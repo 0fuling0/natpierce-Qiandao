@@ -5,10 +5,12 @@ permissions:
 
 on:
   schedule:
-    # 当前 UTC 14:00（可循环 +2 小时）
     - cron: '0 14 * * *'
-
   workflow_dispatch:
+
+concurrency:
+  group: sign-in
+  cancel-in-progress: true
 
 jobs:
   sign-in:
@@ -59,13 +61,6 @@ jobs:
           python -m playwright install chromium
           python -m playwright install-deps chromium
 
-      # ✅ 新增：0～15 分钟随机等待
-      - name: 随机等待
-        run: |
-          DELAY=$((RANDOM % 16))
-          echo "Random delay: ${DELAY} minutes"
-          sleep $((DELAY * 60))
-
       - name: 运行签到脚本
         env:
           SIGN_IN_USERNAME: ${{ secrets.SIGN_IN_USERNAME }}
@@ -93,48 +88,44 @@ jobs:
           wait $XVFB_PID || true
 
           echo "SIGN_EXIT_CODE=$EXIT_CODE" >> "$GITHUB_ENV"
-          echo "Sign exit code: $EXIT_CODE"
 
-      - name: 上传签到截图
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: signin-debug-assets
-          path: |
-            signin_*.png
-            error_*.png
-            debug/**
-            sign-in-recording.mp4
-            xvfb.log
-            ffmpeg.log
-          retention-days: 30
-
-      - name: 修改下一次 cron 时间
+      - name: 修改 cron（小时 +2，分钟随机 0~15）
         if: always()
         run: |
           python << 'EOF'
           import re
+          import random
           from pathlib import Path
 
-          workflow = Path(".github/workflows/time.yaml")
-          text = workflow.read_text(encoding="utf-8")
+          workflow_path = Path(".github/workflows/sign-in.yml")
+          text = workflow_path.read_text(encoding="utf-8")
 
-          m = re.search(r"cron:\s*'0\s+(\d+)\s+\*\s+\*\s+\*'", text)
+          # 读取当前 cron
+          m = re.search(r"cron:\s*'(\d+)\s+(\d+)\s+\*\s+\*\s+\*'", text)
           if not m:
               raise SystemExit("没有找到 cron")
 
-          current = int(m.group(1))
-          next_hour = (current + 2) % 24
+          current_min = int(m.group(1))
+          current_hour = int(m.group(2))
+
+          # hour +2 循环
+          next_hour = (current_hour + 2) % 24
+
+          # minute 每次“重新生成”（不保存历史）
+          next_min = random.randint(0, 15)
+
+          new_cron = f"cron: '{next_min} {next_hour} * * *'"
 
           text = re.sub(
-              r"cron:\s*'0\s+\d+\s+\*\s+\*\s+\*'",
-              f"cron: '0 {next_hour} * * *'",
+              r"cron:\s*'\d+\s+\d+\s+\*\s+\*\s+\*'",
+              new_cron,
               text,
               count=1
           )
 
-          workflow.write_text(text, encoding="utf-8")
-          print(f"Cron updated: {current} -> {next_hour}")
+          workflow_path.write_text(text, encoding="utf-8")
+
+          print(f"cron updated: {current_hour}:{current_min} -> {next_hour}:{next_min}")
           EOF
 
       - name: 提交新的 cron
@@ -143,7 +134,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add .github/workflows/time.yaml
+          git add .github/workflows/sign-in.yml
 
           if git diff --cached --quiet; then
             echo "No changes"
